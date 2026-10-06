@@ -1,0 +1,104 @@
+{
+  "backend": "keyword overlap",
+  "mean_ms": {
+    "embed": 0.0,
+    "retrieve": 0.0,
+    "llm": 5848.4,
+    "total": 5848.5
+  },
+  "results": [
+    {
+      "query": "Why is goodput more useful than raw throughput?",
+      "answer": "Based on the provided context, **Goodput** is more useful than raw throughput because it focuses on **SLOs (Service Level Objects)** and **saturation**.\n\nHere is the breakdown of why this makes Goodput superior:\n\n*   **SLOs:** Goodput counts only requests per second that met specific targets (TTFT and TPOT). This ensures the system only processes requests that satisfy the agreed-upon quality standards, preventing over-provisioning when the system is already at capacity.\n*   **Saturation:** The context explicitly states that \"Throughput at saturation ignores SLOs.\" This means that when the system hits its limit, raw throughput drops, while Goodput remains useful because it monitors the actual state of the system (whether it is under load or saturated) rather than just the theoretical maximum capacity.\n\nIn short, Goodput provides a more accurate and realistic view of system performance by accounting for actual SLOs and saturation levels, whereas raw throughput is",
+      "contexts": [
+        {
+          "id": "goodput",
+          "score": 1.0
+        },
+        {
+          "id": "paged",
+          "score": 0.0
+        },
+        {
+          "id": "radix",
+          "score": 0.0
+        }
+      ],
+      "embed_backend": "keyword overlap",
+      "timings_ms": {
+        "embed": 0.0,
+        "retrieve": 0.1,
+        "llm": 7040.5,
+        "total": 7040.6
+      },
+      "server_timings": {
+        "prompt_n": 151,
+        "prompt_ms": 522.102,
+        "predicted_n": 200,
+        "predicted_ms": 3842.566
+      }
+    },
+    {
+      "query": "What problem does PagedAttention actually solve?",
+      "answer": "PagedAttention solves the problem of **internal fragmentation in GPU memory** caused by storing key-value pairs in non-contiguous pages.\n\nBy using non-contiguous pages (often called \"paged\" or \"paged attention\"), the model avoids the wasted space that would otherwise exist if all KV cache entries were stored contiguously in a single contiguous block of memory. This allows the model to utilize more of the available GPU memory for computation and inference.",
+      "contexts": [
+        {
+          "id": "paged",
+          "score": 1.0
+        },
+        {
+          "id": "radix",
+          "score": 0.0
+        },
+        {
+          "id": "disagg",
+          "score": 0.0
+        }
+      ],
+      "embed_backend": "keyword overlap",
+      "timings_ms": {
+        "embed": 0.0,
+        "retrieve": 0.0,
+        "llm": 4583.1,
+        "total": 4583.2
+      },
+      "server_timings": {
+        "prompt_n": 114,
+        "prompt_ms": 384.464,
+        "predicted_n": 92,
+        "predicted_ms": 1729.784
+      }
+    },
+    {
+      "query": "When does splitting prefill and decode help?",
+      "answer": "Splitting prefill and decode helps when the **prefill operation is compute-bound** (requiring significant CPU/GPU cycles for the initial token generation) and the **decode operation is memory-bandwidth-bound** (requiring significant memory bandwidth for the final output).\n\nIn this scenario, the system can utilize **RadixAttention** to cache keys by token prefix in a trie structure. This allows the engine to skip the expensive prefill step entirely for tokens that share prefixes, thereby reducing compute cost. Simultaneously, the continuous batching mechanism allows requests to join and leave the running batch immediately after decoding, which is beneficial when the decode step is the bottleneck.\n\n**Answer:** It helps when the prefill step is compute-bound and the decode step is memory-bandwidth-bound.",
+      "contexts": [
+        {
+          "id": "disagg",
+          "score": 2.0
+        },
+        {
+          "id": "radix",
+          "score": 1.0
+        },
+        {
+          "id": "batching",
+          "score": 1.0
+        }
+      ],
+      "embed_backend": "keyword overlap",
+      "timings_ms": {
+        "embed": 0.0,
+        "retrieve": 0.0,
+        "llm": 5921.6,
+        "total": 5921.7
+      },
+      "server_timings": {
+        "prompt_n": 113,
+        "prompt_ms": 387.592,
+        "predicted_n": 158,
+        "predicted_ms": 3078.904
+      }
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "model_key": "qwen35-0.8b",
+  "model": "Qwen3.5 0.8B",
+  "repo_id": "unsloth/Qwen3.5-0.8B-GGUF",
+  "primary_model": "models\\Qwen3.5-0.8B-Q4_K_M.gguf",
+  "primary_quant": "Q4_K_M",
+  "compare_model": "models\\Qwen3.5-0.8B-UD-Q2_K_XL.gguf",
+  "compare_quant": "UD-Q2_K_XL",
+  "mtp_head": null,
+  "mlx_repo": "mlx-community/Qwen3.5-0.8B-4bit"
+}
