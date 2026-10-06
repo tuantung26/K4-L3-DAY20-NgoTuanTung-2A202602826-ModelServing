@@ -166,21 +166,11 @@ def download(asset: str, dest: pathlib.Path) -> pathlib.Path:
     url = f"https://github.com/{REPO}/releases/download/{BUILD}/{asset}"
     dest.parent.mkdir(parents=True, exist_ok=True)
     out = dest.parent / asset
-    print(f"==> Downloading {asset}")
+    print(f"==> Downloading {asset} using curl")
     print(f"    {url}")
-    req = urllib.request.Request(url, headers={"User-Agent": "day20-lab"})
     try:
-        with urllib.request.urlopen(req, timeout=120) as r, out.open("wb") as f:
-            total = int(r.headers.get("Content-Length") or 0)
-            done = 0
-            while chunk := r.read(1 << 16):
-                f.write(chunk)
-                done += len(chunk)
-                if total and sys.stdout.isatty():
-                    print(f"\r    {done / 1e6:6.1f} / {total / 1e6:.1f} MB "
-                          f"({100 * done / total:3.0f}%)", end="", flush=True)
-            print(f"\r    {done / 1e6:6.1f} MB downloaded" + " " * 20)
-    except (urllib.error.URLError, urllib.error.HTTPError) as exc:
+        subprocess.run(["curl.exe", "-L", "-#", "-o", str(out), url], check=True)
+    except subprocess.CalledProcessError as exc:
         labkit.die(
             f"Download failed: {exc}",
             f"Fetch it manually from https://github.com/{REPO}/releases/tag/{BUILD}",

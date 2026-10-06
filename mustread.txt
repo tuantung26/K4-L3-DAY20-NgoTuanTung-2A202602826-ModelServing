@@ -1,0 +1,393 @@
+Chuẩn bị: lấy repo, chọn cách chạy lệnh
+Về bài lab này
+Dựng một llama.cpp server trên laptop của bạn, đo TTFT/TPOT/P50–P99, đẩy server tới điểm bão hoà, chứng minh continuous batching và giải thích một thay đổi tạo speedup thật trên chính máy bạn.
+Bạn làm được gì sau bài này
+Đo và báo riêng TTFT (prefill) và TPOT (decode) với P50/P95/P99 cho hai mức quantization.
+Tìm thread count tốt nhất cho máy bạn và giải thích knee của đường cong bằng cơ chế cụ thể.
+Chạy llama-server OpenAI-compatible, load test ở 10 và 50 user, và chứng minh continuous batching bằng /metrics.
+Xác định điểm bão hoà bằng Little's Law và lập luận goodput@SLO.
+Chạy RAG pipeline gọi vào server và chỉ ra stage chiếm nhiều latency nhất.
+Cần chuẩn bị
+Python 3.10 trở lên đã có trên máy.
+RAM ≥ 8 GB cho Gemma 4 E2B, hoặc ≥ 4 GB cho Qwen3.5 0.8B; dưới 4 GB dùng Colab/Kaggle.
+3–10 GB đĩa trống và mạng truy cập được GitHub và Hugging Face.
+Tài khoản GitHub để fork repo đề bài — bản fork chính là repo nộp bài.
+Git
+Python ≥ 3.10
+Terminal: PowerShell trên Windows, hoặc shell có make trên macOS/Linux
+Lỗi thường gặp
+unknown model architecture: 'gemma4' → llama.cpp quá cũ; chạy make runtime (Windows: .\lab.ps1 runtime) để tải lại bản đã pin.
+couldn't bind HTTP server socket … port: 8080 → port bị chiếm; đặt LAB_SERVER_PORT=8090 và dùng cùng biến đó cho smoke, load, metrics, pipeline.
+make serve báo không tìm thấy venv → chưa chạy make setup.
+busy_slots ≈ 1 trong report metrics → make metrics chạy khi server rảnh; chạy lại chồng thời gian với make load-50.
+make metrics báo scrape failed → server chưa chạy; bật make serve trước.
+Hugging Face bị chặn → làm theo docs/MANUAL-DOWNLOAD.md.
+make: *** [verify] Error 1 sau checklist → make chỉ báo verify còn mục thiếu; đọc checklist phía trên.
+Đây là bài cá nhân. Bạn làm trên máy của mình và tự nộp một repo riêng. Đầu ra cuối cùng là một repo GitHub public, trong đó có số đo latency, kết quả load test, bằng chứng continuous batching, kết quả RAG pipeline và bản submission/REFLECTION.md giải thích các con số đó.
+
+Số liệu của bạn không so sánh được với bạn cùng lớp. Rubric chấm độ rõ ràng của setup, phép đo và lập luận, không chấm tốc độ tuyệt đối. Một laptop CPU 8 GB và một máy có GPU mạnh đều có thể đạt 100/100. Toàn bộ 100 điểm base không cần GPU, compiler hay Docker.
+
+Fork repo đề bài và đặt tên bài nộp
+Bạn không làm trực tiếp trên repo đề bài. Bạn fork nó về tài khoản GitHub của mình, và bản fork đó chính là repo bạn nộp. Vì vậy hãy đặt đúng tên bài nộp ngay từ lúc fork.
+
+Repo đề bài Day 20
+git clone https://github.com/VinUni-AI20k/K4-Track02-Day20-ModelServing-Lab.git
+
+1. Mở repo đề bài ở trên, bấm Fork ở góc trên bên phải.
+2. Ở trang Create a new fork, chọn Owner là tài khoản của bạn. Ô Repository name đổi thành tên theo mẫu K4-L3-DAY20-HoVaTen-MSSV-ModelServing: họ tên không dấu, không khoảng trắng, ví dụ K4-L3-DAY20-NguyenVanAn-20241234-ModelServing.
+3. Bấm Create fork. Bản fork của một repo public cũng là public — đúng yêu cầu nộp bài.
+4. Clone bản fork của bạn (không phải repo đề bài) về máy. Fork chỉ tạo bản sao trên GitHub, còn lab chạy trên laptop nên bạn cần code ở máy; mọi kết quả sau đó sẽ được git push ngược lên chính bản fork này. Clone rồi mở terminal ở thư mục gốc:
+git clone https://github.com/<tài-khoản-của-bạn>/K4-L3-DAY20-<HoVaTen>-<MSSV>-ModelServing.git
+cd K4-L3-DAY20-<HoVaTen>-<MSSV>-ModelServing
+Copy
+Nếu lỡ fork với tên mặc định, vào Settings → General → Repository name của bản fork để đổi tên, rồi clone theo tên mới. Kiểm tra bằng git remote -v: origin phải trỏ tới repo trên tài khoản của bạn, để mọi lần git push sau này đi thẳng vào bài nộp.
+
+Lệnh make hay .\lab.ps1?
+Mọi bước trong lab đều là một target có tên, ví dụ bench, serve, verify. Trên macOS/Linux bạn gõ make <target>. Windows không có make, nên repo kèm sẵn lab.ps1 với đúng các tên target đó: bạn gõ .\lab.ps1 <target>. Từ đây trở đi, khi thấy make bench, người dùng Windows hiểu là .\lab.ps1 bench.
+
+Lab không dùng python toàn cục. Mọi thứ chạy trong virtualenv .venv mà bước setup tạo ra. Khi cần gọi Python trực tiếp, dùng .venv/bin/python (macOS/Linux) hoặc .venv\Scripts\python (Windows).
+Setup: probe phần cứng, tải runtime và model
+Trước khi đo bất cứ thứ gì, lab cần biết máy bạn có gì: bao nhiêu core, bao nhiêu RAM, có accelerator hay không. Mọi script phía sau đọc thông tin này để chọn số thread mặc định và quyết định có offload lên GPU hay không. Vì vậy bước đầu tiên là probe, và nó chạy được trước cả khi cài package nào.
+
+Probe phần cứng
+make probe
+Copy
+Lệnh này in CPU, số core physical/logical, RAM, accelerator và ghi ra hardware.json (rubric 1). Chụp màn hình ngay: submission/screenshots/01-hardware-probe.png.
+
+Dựa vào RAM vừa thấy, chọn cách chạy:
+
+RAM	Cách làm
+≥ 8 GB	Dùng model mặc định Gemma 4 E2B (~5.2 GB tải về)
+4–8 GB	Chạy local với Qwen3.5 0.8B (~0.9 GB tải về) — không mất điểm
+< 4 GB	Làm trên Colab/Kaggle theo docs/CLOUD.md — không mất điểm, nhưng phải khai báo ở REFLECTION §1
+Rubric không quan tâm bạn chọn model nào. Model nhỏ còn giúp phần load test dễ đọc hơn, vì mỗi request xong nhanh hơn nên bạn thu được nhiều mẫu hơn trong 60 giây.
+
+Cài đặt
+Bước setup tạo .venv, cài 4 package Python, tải llama.cpp prebuilt binary (không compile) và tải hai mức quantization của model đã chọn. Mất khoảng 5–15 phút. Nếu chọn Qwen3.5 0.8B, đặt biến LAB_MODEL trước khi chạy setup.
+
+Chọn lệnh setup theo hệ điều hành
+macOS / Linux
+Windows
+make setup                              # Gemma 4 E2B (mặc định)
+# hoặc, với RAM 4–8 GB:
+LAB_MODEL=qwen35-0.8b make setup
+Copy
+Khi xong, models/active.json ghi lại model bạn đã chọn (rubric 2), nên các bước sau tự dùng đúng model mà không cần đặt lại biến. File weights (models/*.gguf) và binary (runtime/) đã nằm trong .gitignore; bạn không commit chúng.
+
+Nếu tải model thất bại vì mạng chặn Hugging Face, script in ra đúng lệnh curl cần chạy; hướng dẫn tải tay ở docs/MANUAL-DOWNLOAD.md.
+
+Checkpoint: bạn có hardware.json và models/active.json ở thư mục gốc repo, và terminal kết thúc bằng phần "Setup complete" cùng gợi ý lệnh tiếp theo. Hai file này là toàn bộ bằng chứng cho phần Setup (10 điểm); từ đây bạn đã có server và model để bắt đầu đo.
+Đo baseline: TTFT, TPOT và percentile
+Bạn đã có model chạy được. Câu hỏi đầu tiên của serving là: một người dùng thực sự phải chờ bao lâu, và thời gian đó nằm ở đâu? Bước này cho bạn bảng latency baseline của cả hai mức quantization. Đây là con số "before" mà mọi so sánh sau này dựa vào.
+
+TTFT và TPOT khác nhau thế nào?
+Một request sinh văn bản đi qua hai giai đoạn. Prefill xử lý toàn bộ prompt một lần; thời gian từ lúc gửi request tới lúc nhận token đầu tiên gọi là TTFT (time to first token). Sau đó là decode: model sinh từng token một; thời gian trung bình cho mỗi token sau token đầu gọi là TPOT (time per output token).
+
+Hai con số này bị giới hạn bởi hai thứ khác nhau. Prefill chủ yếu tốn compute; prompt ngắn che giấu nó, còn RAG với context dài thì làm nó phình lên. Decode bị giới hạn bởi memory bandwidth, không phải FLOPs: mỗi token mới phải đọc lại weights từ bộ nhớ. Vì thế bản quantization nhỏ hơn thường decode nhanh hơn — ít byte phải di chuyển cho mỗi token. Rubric yêu cầu báo TTFT và TPOT riêng, không gộp thành một con số end-to-end, chính vì chúng trả lời hai câu hỏi khác nhau.
+
+Percentile cho biết phân phối, không chỉ trung bình. P50 là trường hợp điển hình; P95/P99 là trải nghiệm của những request chậm nhất. Script dùng nearest-rank: với 10 mẫu, P50 là giá trị nhỏ thứ 5, không nội suy giữa hai mẫu chưa từng đo.
+
+Script làm gì khi bạn chạy
+make bench tự bật llama-server trên port riêng 8099, gửi một request warm-up rồi bỏ kết quả đó, sau đó stream 10 prompt qua /v1/chat/completions và tắt server. Rồi nó lặp lại toàn bộ với bản quantization thứ hai. TTFT đo phía client — đúng thứ người dùng phải chờ. Số token lấy từ block timings mà llama.cpp trả về, nên TPOT không phải đoán từ số chunk SSE.
+
+Thao tác
+1. Trong terminal ở thư mục gốc repo, chạy:
+make bench
+Copy
+Mỗi prompt in ra một dòng ttft=… tpot=… e2e=… out=…. Nếu thấy only N/10 requests succeeded, đọc log server trước khi dùng số đó.
+
+1. Mở benchmarks/01-quickstart-results.md. Bảng có hai hàng, một cho mỗi quantization, với các cột Load, TTFT P50/P95, TPOT P50/P95, E2E P50/P95/P99 và Decode (tok/s). Chụp submission/screenshots/02-bench.png.
+2. Để đánh giá chất lượng, hỏi cùng một câu trên hai server. Bản 4-bit chạy bằng make serve; bản 2-bit chạy bằng serve.py --compare. Cả hai mặc định dùng port 8080, nên tắt server thứ nhất bằng Ctrl-C trước, hoặc cho bản 2-bit một port riêng như lệnh bên dưới.
+3. Thay section "Your observation (required -- replace this line)" trong 01-quickstart-results.md bằng nhận xét của bạn.
+Bật bản 2-bit trên port 8090
+macOS / Linux
+Windows
+.venv/bin/python labs/02-serve/serve.py --compare --port 8090
+Copy
+Khi 2-bit lại chậm hơn
+Script tự so tốc độ decode của hai bản. Nếu bản 2-bit chậm hơn, đó là kết quả thật: ít bit chỉ mua được tốc độ khi decode bị giới hạn bởi bandwidth. Trên máy bị giới hạn bởi compute — ít core, không offload GPU — chi phí dequantize có thể lớn hơn phần byte tiết kiệm được. Hãy nói máy bạn thuộc trường hợp nào.
+
+Checkpoint
+Bạn có bảng cho cả hai quantization, TTFT và TPOT ở hai cột riêng, và một nhận xét trả lời ba ý: 2-bit nhanh hơn bao nhiêu, nhỏ hơn bao nhiêu, và có đáng dùng không sau khi bạn tự so chất lượng câu trả lời. Phần này là rubric 3, 4, 5 (20 điểm). Lưu ý lần chạy đầu thường chậm hơn vì weights chưa nằm trong page cache của hệ điều hành; hãy biết mình đang báo số của lần chạy nào. Có baseline rồi, bước tiếp theo đi tìm knob làm nó nhanh hơn.
+Tune thread count: thay đổi quan trọng nhất trên máy bạn
+REFLECTION §5 — "The single change that mattered most" — là phần nặng nhất của rubric (10 điểm) và là phần grader đọc kỹ nhất. Nó cần một before/after thật trên máy bạn, kèm giải thích cơ chế. Bước này cho bạn số liệu đó mà không cần compiler hay GPU.
+
+Vì sao số thread là knob đáng tune?
+Trên CPU, số thread quyết định bao nhiêu core cùng làm việc cho một bước decode. Trực giác "càng nhiều thread càng nhanh" thường sai với decode. Vì decode bị giới hạn bởi memory bandwidth, throughput thường tăng tới khoảng số core physical rồi đi ngang hoặc giảm: thread thừa không thêm việc hữu ích mà tranh nhau cùng các memory channel. Hyperthread (logical core) chia sẻ tài nguyên của core physical nên thường không giúp.
+
+Điểm mà đường cong ngừng tăng gọi là knee. Vị trí của knee trên máy bạn — và lý do nó nằm ở đó — chính là nội dung cần báo cáo. Nếu máy bạn không theo dạng kỳ vọng, kết quả đó còn đáng viết hơn, miễn là bạn giải thích được.
+
+Script làm gì
+make tune gọi llama-bench (đi kèm runtime prebuilt) cho một lưới thread: 1, một nửa số core physical, số core physical, số core logical (nếu lớn hơn physical), và gấp đôi số logical khi máy có từ 8 logical core trở lên — điểm cuối cố tình oversubscribe để bạn thấy throughput tụt. Mặc định nó đo tg128, tức decode 128 token. Mỗi điểm chạy 2 lần.
+
+Thao tác
+1. Chạy sweep (mất vài phút):
+make tune
+Copy
+Mỗi điểm in ra một dòng -t N tg128 = … tok/s.
+
+1. Mở benchmarks/01-tuning-tg128.md. Đọc dòng Best, Slowest tested và Against the physical-core default — dòng cuối là tỉ lệ speedup của thread tốt nhất so với mặc định.
+2. Thay section "Your explanation (required -- replace this line)": knee nằm ở đâu, và vì sao ở đó.
+3. (Tuỳ chọn) đo lại baseline với thread tốt nhất, thay <N> bằng số trong dòng Best: LAB_N_THREADS=<N> make bench (Windows: $env:LAB_N_THREADS = '<N>' rồi .\lab.ps1 bench).
+Nếu muốn tune prefill thay vì decode, chạy tune.py --metric pp512. Đổi quantization, LAB_N_CTX hay --parallel rồi đo lại cũng là một before/after hợp lệ cho §5.
+
+Đọc bảng kết quả thế nào?
+Cột vs best cho biết mỗi mức thread đạt bao nhiêu phần trăm so với mức tốt nhất. Một bảng có dạng kỳ vọng trông như sau: throughput gần như đi ngang từ vài thread tới số core physical, rồi tụt rõ ở mức oversubscribe — chẳng hạn mức gấp đôi số logical chỉ còn khoảng 84% so với mức tốt nhất. Đó là dấu hiệu các thread đang chờ cùng một nguồn dữ liệu thay vì làm thêm việc.
+
+Hãy chú ý hai trường hợp khác. Nếu đường cong phẳng từ 1 thread trở lên, decode trên máy bạn có thể đã chạm trần bandwidth ngay từ ít thread. Nếu nó vẫn tăng ở mức logical, hãy nói rõ và tìm lý do thay vì che đi. Trên máy ảo cloud chỉ có 1 core physical, lưới thường chỉ là [1, 2] với chênh lệch nhỏ; kết quả đó vẫn hợp lệ, nhưng nó mô tả VM được cấp chứ không mô tả laptop của bạn — ghi rõ giới hạn này trong §5.
+
+Cái được chấm là lời giải thích
+Một speedup 1.06× được giải thích đúng cơ chế ăn điểm cao hơn một speedup 3× chỉ ghi "nó nhanh hơn". Bám vào cơ chế cụ thể: memory bandwidth, vector width, cache residency, hay scheduling.
+
+Checkpoint
+Bạn có bảng thread → tok/s, chỉ ra được knee, và viết được một hai câu về việc các thread thừa đang tranh nhau tài nguyên gì. Đây là nguyên liệu cho REFLECTION §5. Từ đây lab chuyển từ "đo một model" sang "vận hành một serving stack": thay vì một request mỗi lần, bạn sẽ cho nhiều người dùng cùng gọi vào server.
+Dựng server và chứng minh nó hoạt động
+Đến giờ, make bench tự bật rồi tự tắt server. Từ bước này bạn chạy một server lâu dài, giống cách vLLM hay SGLang chạy trong production: API OpenAI-compatible, continuous batching và Prometheus /metrics. Mục tiêu là một screenshot chứng minh server trả về completion thật và metrics ghi nhận nó.
+
+Server được bật với cấu hình gì?
+make serve chạy llama-server trên port 8080 với --parallel 4 --cont-batching --metrics. --parallel 4 tạo 4 slot, tức 4 request có thể được xử lý đồng thời. --cont-batching (continuous batching) cho phép request vào và ra khỏi batch ở mỗi bước decode, thay vì chờ đủ một batch cố định. --metrics mở endpoint /metrics dạng Prometheus. Context mặc định là 2048 token và được chia giữa các slot.
+
+Server cũng chạy với --reasoning off. Gemma 4 là reasoning model; nếu bật thinking, message.content rỗng cho tới khi model nghĩ xong, nên với ngân sách token nhỏ bạn sẽ nhận câu trả lời trống.
+
+Các endpoint bạn sẽ dùng:
+
+Endpoint	Dùng để
+POST /v1/chat/completions	Gọi model theo chuẩn OpenAI
+GET /metrics	Đọc counter và gauge dạng Prometheus
+GET /slots	Xem trạng thái từng slot
+GET /health	Kiểm tra server sẵn sàng
+Thao tác
+1. Mở terminal 1 và giữ nó chạy suốt các bước còn lại:
+make serve
+Copy
+Server in ra binary, model, threads, số slot và danh sách endpoint, rồi chờ request.
+
+1. Mở terminal 2, chạy smoke test:
+make smoke
+Copy
+Smoke đọc /metrics, gửi một câu hỏi qua /v1/chat/completions, in câu trả lời và server timings (prefill và decode tok/s), rồi đọc lại /metrics và in phần tăng thêm.
+
+1. Chụp submission/screenshots/03-serve-and-smoke.png. Ảnh phải có cả server đang chạy và output của smoke. Có thể chia đôi terminal hoặc chụp hai ảnh 03a-/03b-.
+Nếu 8080 đã bị chiếm, đặt LAB_SERVER_PORT=8090 (Windows: $env:LAB_SERVER_PORT = '8090') và dùng cùng biến đó cho mọi lệnh tiếp theo trong lab.
+
+Đọc output của smoke
+Dòng server timings tách request vừa rồi thành hai phần: prompt … tok in … ms là prefill, decode … tok in … ms là decode, mỗi phần kèm tốc độ tok/s. Đây là cùng cặp TTFT/TPOT bạn đo ở bước baseline, nhưng do chính server báo, không tính thời gian mạng phía client. Prefill xử lý cả prompt trong một lượt, còn decode sinh từng token một.
+
+Phần /metrics in ra các counter đáng theo dõi, mỗi cái kèm (+N) nếu tăng sau request:
+
+Metric	Ý nghĩa
+llamacpp:tokens_predicted_total	Tổng token server đã sinh — rubric 7 cần nó khác 0
+llamacpp:prompt_tokens_total	Tổng token prompt đã prefill
+llamacpp:n_decode_total	Số bước decode đã chạy
+llamacpp:requests_processing	Số request đang xử lý ngay lúc đọc
+Các knob của server
+Mọi thứ đặt sau -- được chuyển thẳng cho llama-server, ví dụ serve.py -- --ctx-size 4096. Tăng --ctx-size làm KV cache lớn hơn, nên RAM (RSS) của process tăng theo. Bạn chưa cần đổi knob nào để lấy điểm base; chúng hữu ích khi bạn muốn một before/after khác cho §5 hoặc làm bonus.
+
+Checkpoint
+Smoke kết thúc bằng dòng OK -- served a completion and tokens_predicted_total is … (non-zero). Dòng đó là rubric 6 và 7 (15 điểm). Nếu smoke báo Is llama-server running, terminal 1 chưa chạy hoặc đang chạy trên port khác. Server đã trả lời được một request; bước tiếp theo xem nó cư xử thế nào khi nhiều người cùng gọi.
+Load test và bằng chứng continuous batching
+Một request lẻ không nói gì về serving. Câu hỏi thật là: khi 10 rồi 50 người dùng cùng gọi, throughput và latency thay đổi ra sao, và scheduler có thật sự gộp các request lại không? Bước này cho bạn hai lần load test và bằng chứng batching đọc thẳng từ server.
+
+Load test gửi gì?
+labs/02-serve/load-test.py dùng locust với một hỗn hợp có chủ đích: 80% prompt ngắn kiểu chat (48 token output) và 20% prompt dài kiểu RAG có kèm một đoạn tài liệu (96 token output). Mỗi người dùng ảo nghỉ 0,2–1,5 giây giữa hai request. Hỗn hợp này phản ánh một endpoint thật: chính các request RAG dài là thứ kéo P95 lên cho tất cả những người đang chia sẻ slot.
+
+Gauge nào chứng minh batching?
+Gauge quan trọng là llamacpp:n_busy_slots_per_decode: số slot trung bình cùng làm việc hữu ích trong mỗi bước decode. Khi chỉ có một request, nó quanh 1. Dưới tải, nó tiến dần về số --parallel — sự tăng đó chính là continuous batching, và là lý do throughput tăng nhanh hơn latency. Gauge requests_deferred lớn hơn 0 nghĩa là có nhiều request tới hơn số slot, nên một phần phải xếp hàng.
+
+Vì đây là gauge tức thời, nó chỉ có ý nghĩa khi được đọc trong lúc có tải.
+
+Ba terminal chạy cùng lúc ở bước 50 user
+50 user ảo
+
+GET /metrics mỗi 2 giây
+
+Terminal 2: make load-50
+
+Terminal 1: llama-server
+
+Terminal 3: make metrics
+
+locust-50_stats.csv
+
+02-server-batching-u50.md
+
+Hai luồng cùng đánh vào một server: locust tạo tải, còn make metrics quan sát server đang xử lý tải đó. Nếu thiếu một trong hai, bạn không có bằng chứng.
+
+Thao tác
+1. Giữ server ở terminal 1. Ở terminal 2, chạy load 10 user trong 60 giây:
+make load-10
+Copy
+Chụp submission/screenshots/04-locust-10.png, phải thấy dòng có # reqs · Median · 95%ile · 99%ile.
+
+1. Ở terminal 2, bắt đầu load 50 user:
+make load-50
+Copy
+1. Ngay khi load-50 đang chạy, mở terminal 3 và chạy:
+make metrics
+Copy
+Mỗi 2 giây nó in một dòng busy_slots=… processing=… deferred=…, trong 60 giây.
+
+1. Khi load-50 kết thúc, chụp submission/screenshots/05-locust-50.png.
+2. Mở benchmarks/02-server-batching-u50.md, thay section "Your observation (required -- replace this line)".
+Lỗi phổ biến nhất của lab
+Chạy make metrics khi server đang rảnh: n_busy_slots_per_decode sẽ ≈ 1 và không chứng minh được continuous batching. make metrics phải chạy chồng thời gian với make load-50.
+
+Trên máy yếu, locust có thể chỉ hoàn thành vài request trong 60 giây. Đó là bình thường; muốn thêm mẫu, chạy lâu hơn (-t 3m) hoặc giảm LAB_LOAD_SHORT_TOKENS.
+
+Đọc report batching
+Report ghi giá trị cao nhất của từng gauge trong 60 giây lấy mẫu. Lưu ý n_busy_slots_per_decode là giá trị trung bình mỗi bước decode mà llama.cpp tự tính, nên peak bạn thấy là trung bình cao nhất đã lấy mẫu, không phải độ rộng batch tức thời tối đa. Peak gần 1 nghĩa là request được phục vụ lần lượt; peak tiến gần --parallel nghĩa là scheduler thật sự gộp nhiều request vào chung bước decode.
+
+Hai dòng còn lại cho biết có xếp hàng hay không. Nếu requests_deferred vượt 0, có request phải chờ slot — đó là queue time sẽ hiện ra trong P95. Trên máy chậm, hình ảnh này rất rõ: một lần chạy đã kiểm chứng trên Colab CPU 1 core ghi processing=4 cùng deferred=46 ở 50 user. Trên laptop nhanh, gauge này thường bằng 0 và bài học khó thấy hơn. Nếu dòng kv_cache_usage_ratio ghi n/a, build llama.cpp đang dùng không xuất gauge đó; đừng điền 0 thay cho nó.
+
+Checkpoint
+Bạn có benchmarks/locust-10_stats.csv, benchmarks/locust-50_stats.csv (rubric 8) và report batching với peak n_busy_slots_per_decode rõ ràng lớn hơn 1 — ví dụ dạng "3.79 of 4 slots" (rubric 9). Nếu peak ≈ 1, chạy lại bước 2–3 cho đúng thời điểm. Hai file CSV này là đầu vào cho bước kế tiếp: đọc xem server bão hoà ở đâu.
+Đọc điểm bão hoà: queue time hay compute time?
+Bạn vừa tăng tải lên 5 lần. Câu hỏi bây giờ: server có giao được gấp 5 lần không, và nếu không thì latency tăng thêm đó là gì? Bước này biến hai lần load test thành một saturation reading có bằng chứng (rubric 10, 10 điểm).
+
+Little's Law và effective concurrency
+Little's Law: L = λ × W — số request đang nằm trong hệ thống bằng tốc độ đến nhân thời gian mỗi request ở trong hệ thống. Script tính effective concurrency = RPS × latency trung bình: số request thật sự đang "bay" cùng lúc, bất kể locust giả lập bao nhiêu user.
+
+So con số này với số slot --parallel:
+
+Effective concurrency	Ý nghĩa
+≤ số slot	Request tìm được slot trống khi tới; latency bạn thấy là compute
+> số slot	Request phải xếp hàng; phần P95 tăng thêm là queue time
+Vì effective concurrency đếm cả request đang xếp hàng, tỉ lệ so với số slot có thể vượt 1.0 — đó là occupancy, không phải mức sử dụng slot. Mức sử dụng slot thật thì đọc từ gauge của server ở bước trước.
+
+Goodput@SLO khác throughput thế nào?
+Throughput đếm mọi request được phục vụ mỗi giây. Goodput@SLO chỉ đếm những request đạt mục tiêu latency, ví dụ một ngưỡng P95. Quá điểm bão hoà, bạn mua thêm throughput bằng cách tiêu latency; nếu SLO là một ngưỡng P95 thì các request thêm vào không còn được phục vụ trong SLO nữa. Lab không đặt sẵn con số SLO — bạn tự chọn một ngưỡng trong bài viết và nói mình giữ được bao nhiêu goodput ở đó.
+
+Thao tác
+1. Sau khi có cả hai file CSV, chạy:
+make load-report
+Copy
+1. Mở benchmarks/02-server-results.md. Đọc bảng "Going from 10 to 50 users": offered load, throughput thực giao (kèm % so với tuyến tính), hệ số tăng P95, và effective concurrency so với số slot.
+2. Đọc kết luận script đưa ra: Saturated, At capacity, still scaling, hoặc Not saturated, cùng câu giải thích đi kèm. Nếu có cảnh báo Small sample (dưới 20 request), tin hàng throughput hơn hàng concurrency.
+3. Thay section "Your reading (required -- replace this line)": server bão hoà ở đâu, con số nào thuyết phục bạn, và knob nào bạn sẽ đổi trước để nâng goodput — kèm lý do.
+Script kết luận dựa trên gì?
+Script dùng hai tín hiệu độc lập. Tín hiệu thứ nhất là throughput có scale không: nếu 5 lần tải chỉ giao được dưới một nửa mức tuyến tính, throughput coi như đã phẳng. Tín hiệu thứ hai là slot có kín không: effective concurrency đạt từ 85% số slot trở lên.
+
+Throughput phẳng?	Slot kín?	Kết luận
+Có	Có	Saturated — tải thêm đã thành queue time
+Có	Không	Saturated, nhưng giới hạn không phải số slot — xem bandwidth hoặc áp lực KV/context
+Không	Có	At capacity — đang ở knee, nấc tải tiếp theo là lúc P95 bắt đầu tăng vọt
+Không	Không	Not saturated — tăng số user cho tới khi RPS đi ngang
+Hàng thứ hai đáng chú ý nhất nếu bạn gặp: thêm slot sẽ không giúp, vì cái hết trước là một tài nguyên khác.
+
+Thí nghiệm đáng làm nhất của phần này: chạy make load-50 với 1 slot rồi với 4 slot, so cả RPS lẫn P95. Một trong hai cải thiện nhiều hơn hẳn cái còn lại. Đặt LAB_PARALLEL=1 khi chạy cả make serve lẫn make load-report, để report so effective concurrency với đúng số slot server đang dùng.
+
+Checkpoint
+Bạn nêu được bằng số: RPS tăng bao nhiêu lần, P95 tăng bao nhiêu lần, effective concurrency ở 50 user so với 4 slot, và nếu P95 tăng nhanh hơn RPS thì bạn giải thích được vì sao phần tăng đó là queue time. Đây cũng là bảng bạn chép sang REFLECTION §3. Server đã được hiểu dưới tải; bước cuối nối nó vào một ứng dụng thật.
+
+Was this content helpful?
+
+
+
+Nối server vào RAG pipeline
+Một serving endpoint chỉ có giá trị khi hệ thống khác gọi được nó. Bước này chạy một RAG pipeline nhỏ gọi vào server của bạn, in ra context đã retrieve, và chia latency theo từng stage để bạn thấy thời gian thật sự nằm ở đâu (rubric 12, 13, 15 điểm).
+
+Pipeline gồm những gì?
+Luồng của pipeline.py
+Câu hỏi
+
+embed
+
+retrieve top-k
+
+ghép prompt
+
+llama-server
+
+Câu trả lời
+
+labs/03-integrate/pipeline.py chạy 3 câu hỏi. Mỗi câu đi qua embed → retrieve → ghép prompt → llm, và script đo thời gian từng stage. Mặc định không có embedding server, nên retrieval dùng keyword overlap trên bộ tài liệu đồ chơi TOY_DOCS, và stage embed báo 0.0 ms. Con số 0 đó tự nó là một baseline hữu ích.
+
+Pipeline có hai chỗ đánh dấu STUB: TOY_DOCS (STUB 1) và retrieve() (STUB 2). Nếu bạn có code N16–N19 (cluster, data pipeline, lakehouse, vector index), thay vào đó. Dùng stub không mất điểm; khai sai mới mất điểm. Một câu trung thực như "SQLite thay cho N18 vì Iceberg của tôi chưa xong" vẫn được đủ điểm.
+
+Thao tác
+1. Giữ server chạy ở terminal 1. Ở terminal 2:
+make pipeline
+Copy
+Mỗi câu hỏi in contexts, timings và answer. Cuối cùng là dòng Dominant stage: … (…% of total).
+
+1. Mở benchmarks/03-integration-results.md và thay section "Which N16-N19 pieces are real (required -- replace this line)": liệt kê N16, N17, N18, N19 là real hay stub, rồi trả lời stage nào chiếm nhiều nhất và bạn sẽ tấn công stage nào nếu phải giảm latency 2 lần.
+2. (Tuỳ chọn) dùng embedding thật: chạy make serve-embed (port 8081), rồi chạy pipeline.py --embed-url http://localhost:8081.
+Prompt caching
+Giữ system prompt giống nhau từng byte giữa các lần gọi. Đó là điều cho phép server dùng lại prefix đã cache: sau lần gọi đầu, prompt_tokens_total tăng chậm hơn tokens_predicted_total. Đổi một ký tự là mất phần dùng lại đó.
+
+Những chỗ hay vấp khi thay stub
+Nếu bạn nối corpus thật vào, để ý ngân sách context. --ctx-size mặc định là 2048 và được chia giữa các slot --parallel; nhồi quá nhiều chunk retrieve được vào prompt thì phần thừa bị cắt. Khi cần đếm token để cắt context, hỏi chính server qua /tokenize — tokenizer của llama.cpp không phải của OpenAI, nên con số từ tiktoken sẽ lệch.
+
+Dòng server trong output của mỗi câu hỏi cho biết prefill bao nhiêu token và decode bao nhiêu token. Context retrieve được làm prompt dài ra, tức làm prefill — và TTFT — tăng. Đây là lý do RAG với context dài làm TTFT phình lên như bạn đã đọc ở bước baseline.
+
+Checkpoint
+Cả 3 câu hỏi chạy xong và in context đã retrieve; bạn có latency trung bình theo embed / retrieve / llm. Phần lớn học viên thấy LLM chiếm gần hết, và đúng vậy. Trường hợp thú vị là khi nó không chiếm hết — một embedder chậm hay retrieval trên index lớn có thể vượt cả decode của model nhỏ. Những con số này đi thẳng vào REFLECTION §4.
+
+Was this content helpful?
+
+
+
+Viết REFLECTION, verify và nộp bài
+Mọi số đo đã nằm trong benchmarks/. Bước cuối biến chúng thành một báo cáo có lập luận, kiểm tra repo đủ bằng chứng, và nộp đúng quy định.
+
+Viết REFLECTION.md
+Mở submission/REFLECTION.md và điền §1–§5; §6 trở đi là tuỳ chọn.
+
+Section	Nội dung	Rubric
+§1 Hardware & runtime	Từ make probe; khai báo nếu dùng Colab/Kaggle	1, 2
+§2 Đo lường	Bảng từ 01-quickstart-results.md + nhận xét 2-bit	3, 4, 5
+§3 Serving under load	Bảng từ 02-server-results.md + peak busy slots	8, 9, 10
+§4 Integration	Real/stub N16–N19 + latency từng stage	12, 13
+§5 Thay đổi quan trọng nhất	Before/after + cơ chế	11
+Số trong REFLECTION phải khớp với benchmarks/*.md. make verify không kiểm tra được điều này, nhưng grader thì có. Khai báo việc dùng công cụ AI ở §9 theo docs/RULES.md.
+
+make verify sẽ fail nếu §1–§5 còn placeholder như <Họ Tên> hay _Answer here._, hoặc nếu bảng còn ô trống. Đó là cố ý: nó giữ bạn khỏi nộp một template chưa điền.
+
+Kiểm tra và nộp
+1. Đặt đủ 5 screenshot trong submission/screenshots/: 01-hardware-probe.png, 02-bench.png, 03-serve-and-smoke.png, 04-locust-10.png, 05-locust-50.png.
+2. Commit mọi file, rồi chạy:
+make verify
+Copy
+Lệnh phải exit 0. Nếu fail, nó liệt kê đúng file còn thiếu, file chưa commit, hay section "required -- replace this line" còn sót.
+
+1. Push lên bản fork của bạn bằng git push. Mở bản fork trên GitHub, kiểm tra tên repo đúng mẫu K4-L3-DAY20-HoVaTen-MSSV-ModelServing — nếu chưa, đổi ở Settings → General → Repository name — và các file trong benchmarks/, submission/ đã lên đủ.
+2. Paste URL repo vào ô submission Day 20 trên VinUni LMS trước 23:59 (giờ Việt Nam, UTC+7) ngày làm lab, trừ khi key coach thông báo deadline khác trong vòng 48 giờ sau buổi lab.
+Repo private = 0 điểm
+Repo phải public cho đến khi điểm được công bố. Không commit models/*.gguf, runtime/ hay .env. Nộp sau deadline bị trừ điểm theo docs/RULES.md.
+
+Trước khi paste URL vào LMS0/5
+
+`make verify` exit 0 trên bản đã commit.
+
+Không còn "required -- replace this line" trong `benchmarks/*.md`.
+
+Số trong REFLECTION khớp với `benchmarks/*.md`.
+
+Tên repo đúng mẫu `K4-L3-DAY20-HoVaTen-MSSV-ModelServing`.
+
+Mở URL repo trong cửa sổ ẩn danh vẫn xem được.
+Bài được chấm theo docs/RUBRIC.md: 100 điểm base gồm Setup 10, Đo lường 20, Serving 25, Phân tích 20, Integration 15, Submission 10. Grader đọc file thật trong repo của bạn, không chấm những gì bạn nói bạn đã làm.
+
+Was this content helpful?
+
+
+
+Bonus (tuỳ chọn, tối đa +10 điểm)
+Chỉ bắt đầu khi make verify đã exit 0 — bonus không bù được phần base còn thiếu. Bonus là điểm cộng cho bài lab, chấm từ bằng chứng trong repo; không phải điểm giơ tay hay phát biểu. Có 5 tiêu chí, mỗi tiêu chí 2 điểm. Chọn 1–2 mục; một finding giải thích sâu có giá trị hơn năm bảng số nông.
+
+#	Được điểm khi	Lệnh
+B1	Compile llama.cpp cho CPU của bạn và so với prebuilt binary	make build-llama && make compare-builds
+B2	Chạy ít nhất 1 sweep	make sweep-quant / sweep-ctx / sweep-batch / sweep-gpu
+B3	Before/after rõ ràng từ bonus track ghi ở REFLECTION §6	—
+B4	Làm ít nhất 1 challenge C1–C7 hoặc C10	docs/bonus/CHALLENGES.md
+B5	Một so sánh runtime/regime: MLX (Mac), C8, C9 hoặc C6	make mlx-compare · make semantic-cache · make embed-demo
+Gợi ý chọn theo máy: chỉ có CPU → B1, thường là speedup lớn nhất lab; RAM hạn chế → make sweep-quant; có GPU → make sweep-gpu; quan tâm RAG context dài → make sweep-ctx; không muốn tải thêm → C8 hoặc C9 với --offline. B1 cần cmake.
+
+Mỗi script bonus sinh một file benchmarks/bonus-*.md cũng có section "required -- replace this line" mà bạn phải điền. Chi tiết ở docs/bonus/README.md.
+
+Checkpoint: §6 của REFLECTION có before/after từ B1 hoặc B2 (không dùng lại kết quả make tune), và file benchmarks/bonus-*.md tương ứng đã được commit.
+
+Was this content helpful?
+
+
+

@@ -45,8 +45,8 @@ function Locust {
 switch ($Target) {
     'help' {
         Write-Host ""
-        Write-Host "Day 20 lab — Windows runner" -ForegroundColor Cyan
-        Write-Host "Usage:  .\lab.ps1 <target>"
+        Write-Host "Day 20 lab - Windows runner" -ForegroundColor Cyan
+        Write-Host "Usage:  .\lab.ps1 [target]"
         Write-Host ""
         Write-Host "Setup (00)"
         Write-Host "  probe          Probe hardware -> hardware.json"
@@ -157,7 +157,7 @@ switch ($Target) {
 
     default {
         Write-Host "Unknown target: $Target" -ForegroundColor Red
-        Write-Host "Run  .\lab.ps1  with no arguments to list targets."
+        Write-Host 'Run  .\lab.ps1  with no arguments to list targets.'
         exit 1
     }
 }

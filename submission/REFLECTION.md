@@ -6,10 +6,10 @@
 >
 > `make verify` sẽ fail nếu còn placeholder chưa điền. Đó là cố ý.
 
-**Họ Tên:** _<Họ Tên>_
-**MSSV:** _<MSSV>_
-**Cohort:** _<A20-K1 / A20-K2 / ...>_
-**Ngày submit:** _<YYYY-MM-DD>_
+**Họ Tên:** Ngô Tuấn Tùng
+**MSSV:** 2A202602826
+**Cohort:** A20-K4
+**Ngày submit:** 2026-06-10
 
 ---
 
@@ -17,17 +17,17 @@
 
 > Từ `make probe`. Paste output hoặc điền tay.
 
-- **OS:** _<macOS 14 / Windows 11 / Ubuntu 24.04 / ...>_
-- **CPU:** _<Apple M2 / Intel i7-12700H / AMD Ryzen 7 5800H>_
-- **Cores:** _<physical / logical>_
-- **CPU extensions:** _<AVX2 / AVX-512 / NEON / —>_
-- **RAM:** _<GB>_
-- **Accelerator:** _<NVIDIA RTX 4060 / Apple Metal / Vulkan / CPU only>_
-- **llama.cpp asset đã tải:** _<vd: llama-b10488-bin-macos-arm64.tar.gz>_
-- **Model đã dùng:** _<Gemma 4 E2B / Qwen3.5 0.8B>_ (`LAB_MODEL=`_<gemma4-e2b / qwen35-0.8b>_)
-- **Quantization:** _<primary>_ + _<compare>_ (từ `models/active.json`)
+- **OS:** Windows 11 (AMD64)
+- **CPU:** Intel(R) Core(TM) i7-12650H
+- **Cores:** 10 physical / 16 logical
+- **CPU extensions:** AVX2
+- **RAM:** 15.7 GB
+- **Accelerator:** NVIDIA GeForce RTX 4050 Laptop GPU (6141 MiB)
+- **llama.cpp asset đã tải:** _<sẽ điền sau bước setup>_
+- **Model đã dùng:** Qwen3.5 0.8B (`LAB_MODEL=qwen35-0.8b`)
+- **Quantization:** _<sẽ điền sau bước setup>_
 
-**Chạy ở đâu:** _<laptop của tôi / Colab / Kaggle>_
+**Chạy ở đâu:** laptop của tôi
 _(Nếu dùng cloud fallback: nói rõ vì sao — RAM < 8 GB, setup fail, v.v. Không mất điểm.)_
 
 **Setup story** (≤ 80 chữ): điều gì cần thay đổi để lab chạy trên máy bạn? Có bước
